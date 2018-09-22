@@ -1,0 +1,778 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2015-01-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "functionAppName": {
+      "type": "string",
+      "metadata": {
+        "description": "Name of the function app"
+      },
+      "defaultValue": "[concat('asfnapp',uniqueString(resourceGroup().id))]"
+    },
+    "functionApp_appServicePlanName": {
+      "type": "string",
+      "metadata": {
+        "description": "Name of the app service plan to host function app."
+      },
+      "defaultValue": "[concat('asfnappsvc',uniqueString(resourceGroup().id))]"
+    },
+    "storageAccountType": {
+      "type": "string",
+      "defaultValue": "Standard_LRS",
+      "allowedValues": [
+        "Standard_LRS",
+        "Standard_GRS",
+        "Standard_RAGRS"
+      ],
+      "metadata": {
+        "description": "Storage Account type"
+      }
+    },
+    "storageAccountName": {
+      "type": "string",
+      "metadata": {
+        "description": "Name of the Storage account namespace"
+      },
+      "defaultValue": "[concat('asstorage',uniqueString(resourceGroup().id))]"
+    },
+    "eventHubNamespaceName": {
+      "type": "string",
+      "metadata": {
+        "description": "Name of the EventHub namespace"
+      },
+      "defaultValue": "[concat('asevhubns',uniqueString(resourceGroup().id))]"
+    },
+    "eventHubName": {
+      "type": "string",
+      "metadata": {
+        "description": "Name of the Event Hub"
+      },
+      "defaultValue": "[concat('asevhub',uniqueString(resourceGroup().id))]"
+    }
+  },
+  "variables": {
+    "storageAccountid": "[concat(resourceGroup().id,'/providers/','Microsoft.Storage/storageAccounts/', parameters('storageAccountName'))]",
+    "defaultSASKeyName": "RootManageSharedAccessKey",
+    "authRuleResourceId": "[resourceId('Microsoft.EventHub/namespaces/authorizationRules', parameters('eventHubNamespaceName'), variables('defaultSASKeyName'))]",
+    "eventHubApiVersion": "[providers('Microsoft.EventHub','namespaces').apiVersions[1]]",
+    "connectorApiVersion": "[providers('Microsoft.Web','customApis').apiVersions[0]]",
+    "startactivity_connectorName": "MyApp-StartActivity",
+    "updateactivity_connectorName": "MyApp-UpdateActivity",
+    "logexceptionactivity_connectorName": "MyApp-LogExceptionActivity",
+    "startactivity_apiConnectionName": "MyApp-StartActivity",
+    "updateactivity_apiConnectionName": "MyApp-UpdateActivity",
+    "logexceptionactivity_apiConnectionName": "MyApp-LogExceptionActivity",
+    "archiveactivity_connectorName": "MyApp-ArchiveActivity",
+    "archiveactivity_apiConnectionName": "MyApp-ArchiveActivity",
+    "storageApiVersion": "[providers('Microsoft.Storage','storageAccounts').apiVersions[0]]",
+    "serverFarmApiVersion": "[providers('Microsoft.Web','serverFarms').apiVersions[0]]",
+    "sitesApiVersion": "[providers('Microsoft.Web','sites').apiVersions[0]]"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.EventHub/Namespaces",
+      "apiVersion": "[variables('eventHubApiVersion')]",
+      "location": "[resourceGroup().location]",
+      "name": "[parameters('eventHubNamespaceName')]",
+      "properties": {
+        "isAutoInflateEnabled": "false",
+        "maximumThroughputUnits": "0"
+      },
+      "resources": [
+        {
+          "apiVersion": "[variables('eventHubApiVersion')]",
+          "name": "[parameters('eventHubName')]",
+          "type": "EventHubs",
+          "dependsOn": [
+            "[concat('Microsoft.EventHub/namespaces/', parameters('eventHubNamespaceName'))]"
+          ],
+          "properties": {
+            "messageRetentionInDays": "1",
+            "partitionCount": "2",
+            "status": "Active"
+          }
+        }
+      ],
+      "sku": {
+        "name": "Basic",
+        "tier": "Basic",
+        "capacity": 1
+      }
+    },
+    {
+      "type": "Microsoft.Storage/storageAccounts",
+      "apiVersion": "[variables('storageApiVersion')]",
+      "kind": "Storage",
+      "location": "[resourceGroup().location]",
+      "name": "[parameters('storageAccountName')]",
+      "sku": {
+        "name": "[parameters('storageAccountType')]"
+      }
+    },
+    {
+      "type": "Microsoft.Web/serverfarms",
+      "sku": {
+        "name": "Y1",
+        "tier": "Dynamic",
+        "size": "Y1",
+        "family": "Y",
+        "capacity": 0
+      },
+      "kind": "functionapp",
+      "name": "[parameters('functionApp_appServicePlanName')]",
+      "location": "[resourceGroup().location]",
+      "apiVersion": "[variables('serverFarmApiVersion')]",
+      "scale": null,
+      "properties": {
+        "name": "[parameters('functionApp_appServicePlanName')]",
+        "computeMode": "Dynamic",
+        "workerTierName": null,
+        "adminSiteName": null,
+        "hostingEnvironmentProfile": null,
+        "perSiteScaling": false,
+        "reserved": false,
+        "targetWorkerCount": 0,
+        "targetWorkerSizeId": 0
+      },
+      "dependsOn": []
+    },
+    {
+      "apiVersion": "[variables('sitesApiVersion')]",
+      "type": "Microsoft.Web/sites",
+      "kind": "functionapp",
+      "location": "[resourceGroup().location]",
+      "name": "[parameters('functionAppName')]",
+      "scale": null,
+      "properties": {
+        "serverFarmId": "[resourceId('Microsoft.Web/serverfarms', parameters('functionApp_appServicePlanName'))]",
+        "siteConfig": {
+          "appSettings": [
+            {
+              "name": "AzureWebJobsDashboard",
+              "value": "[concat('DefaultEndpointsProtocol=https;AccountName=', parameters('storageAccountName'), ';AccountKey=', listKeys(variables('storageAccountid'),'2015-05-01-preview').key1)]"
+            },
+            {
+              "name": "AzureWebJobsStorage",
+              "value": "[concat('DefaultEndpointsProtocol=https;AccountName=', parameters('storageAccountName'), ';AccountKey=', listKeys(variables('storageAccountid'),'2015-05-01-preview').key1)]"
+            },
+            {
+              "name": "WEBSITE_CONTENTAZUREFILECONNECTIONSTRING",
+              "value": "[concat('DefaultEndpointsProtocol=https;AccountName=', parameters('storageAccountName'), ';AccountKey=', listKeys(variables('storageAccountid'),'2015-05-01-preview').key1)]"
+            },
+            {
+              "name": "WEBSITE_CONTENTSHARE",
+              "value": "[toLower(parameters('functionAppName'))]"
+            },
+            {
+              "name": "FUNCTIONS_EXTENSION_VERSION",
+              "value": "~1"
+            },
+            {
+              "name": "WEBSITE_NODE_DEFAULT_VERSION",
+              "value": "6.5.0"
+            },
+            {
+              "name": "MyApp_EventHubName",
+              "value": "[parameters('eventHubName')]"
+            },
+            {
+              "name": "MyApp_EventHub_ConnectionString",
+              "value": "[listkeys(variables('authRuleResourceId'), variables('eventHubApiVersion')).primaryConnectionString]"
+            },
+            {
+              "name": "WEBSITE_RUN_FROM_PACKAGE",
+              "value": "myzipurl"
+            }
+          ]
+        },
+        "dependsOn": [
+          "[resourceId('Microsoft.Web/serverfarms', parameters('functionApp_appServicePlanName'))]",
+          "[resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName'))]"
+        ]
+      }
+    },
+    {
+      "apiVersion": "[variables('connectorApiVersion')]",
+      "name": "[variables('archiveactivity_connectorName')]",
+      "type": "Microsoft.Web/customApis",
+      "location": "[resourceGroup().location]",
+      "properties": {
+        "description": "MyApp Archive Activity Custom Connector",
+        "displayName": "[variables('archiveactivity_connectorName')]",
+        "backendService": {
+          "serviceUrl": "[concat('https://', parameters('functionAppName'),'.azurewebsites.net/')]"
+        },
+        "swagger": {
+          "swagger": "2.0",
+          "info": {
+            "title": "MyApp Archive Activity Custom Connector",
+            "description": "MyApp Archive Activity connector helps you Archive your messages.",
+            "version": "1.0.0"
+          },
+          "host": "[concat(parameters('functionAppName'),'.azurewebsites.net')]",
+          "basePath": "/",
+          "schemes": [
+            "https",
+            "http"
+          ],
+          "paths": {
+            "/api/ArchiveActivity": {
+              "post": {
+                "operationId": "ArchiveActivity",
+                "x-ms-visibility": "important",
+                "description": "This action will create a new Archive activity for archiving Message.",
+                "summary": "Archive Activity",
+                "produces": [
+                  "application/json"
+                ],
+                "consumes": [
+                  "application/json"
+                ],
+                "parameters": [
+                  {
+                    "name": "AS-Body",
+                    "in": "body",
+                    "schema": {
+                      "type": "object"
+                    },
+                    "description": "Message body to get properties from the message payload.",
+                    "required": true
+                  },
+                  {
+                    "name": "AS-BusinessProcess",
+                    "in": "header",
+                    "type": "string",
+                    "description": "Provide business process name.",
+                    "required": true
+                  },
+                  {
+                    "name": "AS-BusinessTransaction",
+                    "in": "header",
+                    "type": "string",
+                    "description": "Provide business transaction name.",
+                    "required": true
+                  },
+                  {
+                    "name": "AS-CurrentStage",
+                    "in": "header",
+                    "type": "string",
+                    "description": "Specify the name  for current stage.",
+                    "required": true
+                  },
+                  {
+                    "name": "AS-StageActivityId",
+                    "in": "header",
+                    "type": "string",
+                    "required": true
+                  }
+                ],
+                "responses": {
+                  "202": {
+                    "description": "Accepted"
+                  }
+                },
+                "security": [
+                  {
+                    "apikeyQuery": []
+                  },
+                  {
+                    "apikeyHeader": []
+                  }
+                ]
+              }
+            }
+          },
+          "definitions": {},
+          "securityDefinitions": {
+            "apikeyQuery": {
+              "type": "apiKey",
+              "name": "code",
+              "in": "query"
+            },
+            "apikeyHeader": {
+              "type": "apiKey",
+              "name": "x-functions-key",
+              "in": "header"
+            }
+          }
+        },
+        "apiType": "Rest"
+      }
+    },
+    {
+      "apiVersion": "[variables('connectorApiVersion')]",
+      "name": "[variables('startactivity_connectorName')]",
+      "type": "Microsoft.Web/customApis",
+      "location": "[resourceGroup().location]",
+      "properties": {
+        "description": "MyApp Start Activity Custom Connector",
+        "displayName": "[variables('startactivity_connectorName')]",
+        "backendService": {
+          "serviceUrl": "[concat('https://', parameters('functionAppName'),'.azurewebsites.net/')]"
+        },
+        "swagger": {
+          "swagger": "2.0",
+          "info": {
+            "title": "MyApp Start Activity Custom Connector",
+            "description": "MyApp Start Activity connector helps you track your business processes.",
+            "version": "1.0.0"
+          },
+          "host": "[concat(parameters('functionAppName'),'.azurewebsites.net')]",
+          "basePath": "/",
+          "schemes": [
+            "https",
+            "http"
+          ],
+          "paths": {
+            "/api/StartActivity": {
+              "post": {
+                "operationId": "StartActivity",
+                "x-ms-visibility": "important",
+                "description": "This action will create a new Stage activity for tracking.",
+                "summary": "Start Activity",
+                "produces": [
+                  "application/json"
+                ],
+                "consumes": [
+                  "application/json"
+                ],
+                "parameters": [
+                  {
+                    "name": "Body",
+                    "in": "body",
+                    "schema": {
+                      "type": "object",
+                      "properties": {
+                        "MessageBody": {
+                          "type": "object",
+                          "description": "Message body passed to the http trigger"
+                        },
+                        "MessageHeader": {
+                          "type": "object",
+                          "description": "Message header passed to the http trigger"
+                        }
+                      },
+                      "required": [
+                        "MessageBody",
+                        "MessageHeader"
+                      ]
+                    },
+                    "description": "Message body to get properties from the message payload.",
+                    "required": true
+                  },
+                  {
+                    "name": "AS-BusinessProcess",
+                    "in": "header",
+                    "type": "string",
+                    "description": "Provide business process name.",
+                    "required": true
+                  },
+                  {
+                    "name": "AS-BusinessTransaction",
+                    "in": "header",
+                    "type": "string",
+                    "description": "Provide business transaction name.",
+                    "required": true
+                  },
+                  {
+                    "name": "AS-CurrentStage",
+                    "in": "header",
+                    "type": "string",
+                    "description": "Specify the name  for current stage.",
+                    "required": true
+                  },
+                  {
+                    "name": "AS-MainActivityId",
+                    "in": "header",
+                    "type": "string",
+                    "x-ms-visibility": "advanced",
+                    "description": "If this logic app is continuation of existing message flow, provide MainActivityId either from previous logic app or pass the incoming HTTP header which should have MainActivityId.",
+                    "required": false
+                  },
+                  {
+                    "name": "AS-PreviousStage",
+                    "in": "header",
+                    "type": "string",
+                    "x-ms-visibility": "advanced",
+                    "required": false
+                  },
+                  {
+                    "name": "AS-ArchiveMessage",
+                    "in": "header",
+                    "type": "string",
+                    "required": false,
+                    "enum": [
+                      "True",
+                      "False"
+                    ]
+                  }
+                ],
+                "responses": {
+                  "202": {
+                    "description": "Accepted",
+                    "x-ms-summary": "Returns the MainActivityId and StageActivityId that should be passed to UpdateActivity action.",
+                    "schema": {
+                      "type": "object",
+                      "properties": {
+                        "MainActivityId": {
+                          "type": "string",
+                          "description": "MainActivityId"
+                        },
+                        "StageActivityId": {
+                          "type": "string",
+                          "description": "StageActivityId"
+                        }
+                      }
+                    }
+                  }
+                },
+                "security": [
+                  {
+                    "apikeyQuery": []
+                  },
+                  {
+                    "apikeyHeader": []
+                  }
+                ]
+              }
+            }
+          },
+          "definitions": {},
+          "securityDefinitions": {
+            "apikeyQuery": {
+              "type": "apiKey",
+              "name": "code",
+              "in": "query"
+            },
+            "apikeyHeader": {
+              "type": "apiKey",
+              "name": "x-functions-key",
+              "in": "header"
+            }
+          }
+        },
+        "apiType": "Rest"
+      }
+    },
+    {
+      "apiVersion": "[variables('connectorApiVersion')]",
+      "name": "[variables('updateactivity_connectorName')]",
+      "type": "Microsoft.Web/customApis",
+      "location": "[resourceGroup().location]",
+      "properties": {
+        "description": "MyApp Update Activity Custom Connector",
+        "displayName": "[variables('updateactivity_connectorName')]",
+        "backendService": {
+          "serviceUrl": "[concat('https://', parameters('functionAppName'),'.azurewebsites.net/')]"
+        },
+        "swagger": {
+          "swagger": "2.0",
+          "info": {
+            "title": "MyApp Update Activity Custom Connector",
+            "description": "MyApp Update Activity connector helps you track your business processes.",
+            "version": "1.0.0"
+          },
+          "host": "[concat(parameters('functionAppName'),'.azurewebsites.net')]",
+          "basePath": "/",
+          "schemes": [
+            "https",
+            "http"
+          ],
+          "paths": {
+            "/api/UpdateActivity": {
+              "post": {
+                "operationId": "UpdateActivity",
+                "x-ms-visibility": "important",
+                "description": "This action will update an activity with properties provided as headers.",
+                "summary": "Update Activity",
+                "produces": [
+                  "application/json"
+                ],
+                "consumes": [
+                  "application/json"
+                ],
+                "parameters": [
+                  {
+                    "name": "AS-Body",
+                    "in": "body",
+                    "schema": {
+                      "type": "object"
+                    },
+                    "description": "JSON format message body to get properties from the payload.",
+                    "required": false
+                  },
+                  {
+                    "name": "AS-MainActivityId",
+                    "in": "header",
+                    "type": "string",
+                    "description": "Provide MainActivityId from the StartActivity action.",
+                    "required": true
+                  },
+                  {
+                    "name": "AS-StageActivityId",
+                    "in": "header",
+                    "type": "string",
+                    "description": "Provide StageActivityId from the StartActivity action.",
+                    "required": true
+                  },
+                  {
+                    "name": "AS-Status",
+                    "type": "string",
+                    "in": "header",
+                    "description": "Select the status of stage execution.",
+                    "required": false,
+                    "default": "Success",
+                    "x-ms-visibility": "important",
+                    "enum": [
+                      "Success",
+                      "Failure",
+                      "InProgress"
+                    ]
+                  },
+                  {
+                    "name": "AS-BusinessProcess",
+                    "in": "header",
+                    "type": "string",
+                    "description": "Provide business process name.",
+                    "required": true
+                  },
+                  {
+                    "name": "AS-BusinessTransaction",
+                    "in": "header",
+                    "type": "string",
+                    "description": "Provide business transaction name.",
+                    "required": true
+                  },
+                  {
+                    "name": "AS-CurrentStage",
+                    "in": "header",
+                    "type": "string",
+                    "description": "Specify the name  for current stage.",
+                    "required": true
+                  },
+                  {
+                    "name": "AS-ArchiveMessage",
+                    "in": "header",
+                    "type": "string",
+                    "required": false,
+                    "enum": [
+                      "True",
+                      "False"
+                    ]
+                  }
+                ],
+                "responses": {
+                  "202": {
+                    "description": "Accepted"
+                  }
+                },
+                "security": [
+                  {
+                    "apikeyQuery": []
+                  },
+                  {
+                    "apikeyHeader": []
+                  }
+                ]
+              }
+            }
+          },
+          "definitions": {},
+          "securityDefinitions": {
+            "apikeyQuery": {
+              "type": "apiKey",
+              "name": "code",
+              "in": "query"
+            },
+            "apikeyHeader": {
+              "type": "apiKey",
+              "name": "x-functions-key",
+              "in": "header"
+            }
+          }
+        },
+        "apiType": "Rest"
+      }
+    },
+    {
+      "apiVersion": "[variables('connectorApiVersion')]",
+      "name": "[variables('logexceptionactivity_connectorName')]",
+      "type": "Microsoft.Web/customApis",
+      "location": "[resourceGroup().location]",
+      "properties": {
+        "description": "MyApp LogException Activity Custom Connector",
+        "displayName": "[variables('logexceptionactivity_connectorName')]",
+        "backendService": {
+          "serviceUrl": "[concat('https://', parameters('functionAppName'),'.azurewebsites.net/')]"
+        },
+        "swagger": {
+          "swagger": "2.0",
+          "info": {
+            "title": "MyApp LogException Activity Custom Connector",
+            "description": "MyApp LogException Activity connector helps you track your business exceptions.",
+            "version": "1.0.0"
+          },
+          "host": "[concat(parameters('functionAppName'),'.azurewebsites.net')]",
+          "basePath": "/",
+          "schemes": [
+            "https",
+            "http"
+          ],
+          "paths": {
+            "/api/LogExceptionActivity": {
+              "post": {
+                "operationId": "LogExceptionActivity",
+                "x-ms-visibility": "important",
+                "description": "This action will log all exceptions.",
+                "summary": "Log Exception Activity",
+                "produces": [
+                  "application/json"
+                ],
+                "consumes": [
+                  "application/json"
+                ],
+                "parameters": [
+                  {
+                    "name": "AS-StageActivityId",
+                    "in": "header",
+                    "type": "string",
+                    "description": "Provide StageActivityId.",
+                    "required": true
+                  },
+                  {
+                    "name": "AS-ExceptionMessage",
+                    "in": "header",
+                    "type": "string",
+                    "required": true
+                  },
+                  {
+                    "name": "AS-ExceptionCode",
+                    "in": "header",
+                    "type": "string",
+                    "required": true
+                  },
+                  {
+                    "name": "AS-BusinessProcess",
+                    "in": "header",
+                    "type": "string",
+                    "description": "Provide business process name.",
+                    "required": true
+                  }
+                ],
+                "responses": {
+                  "202": {
+                    "description": "Accepted"
+                  }
+                },
+                "security": [
+                  {
+                    "apikeyQuery": []
+                  },
+                  {
+                    "apikeyHeader": []
+                  }
+                ]
+              }
+            }
+          },
+          "definitions": {},
+          "securityDefinitions": {
+            "apikeyQuery": {
+              "type": "apiKey",
+              "name": "code",
+              "in": "query"
+            },
+            "apikeyHeader": {
+              "type": "apiKey",
+              "name": "x-functions-key",
+              "in": "header"
+            }
+          }
+        },
+        "apiType": "Rest"
+      }
+    },
+    {
+      "type": "Microsoft.Web/connections",
+      "name": "[variables('archiveactivity_apiConnectionName')]",
+      "apiVersion": "[variables('connectorApiVersion')]",
+      "location": "[resourceGroup().location]",
+      "scale": null,
+      "properties": {
+        "displayName": "[variables('archiveactivity_apiConnectionName')]",
+        "customParameterValues": {},
+        "api": {
+          "id": "[resourceId('Microsoft.Web/customApis', variables('archiveactivity_connectorName'))]"
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Web/customApis', variables('archiveactivity_connectorName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Web/connections",
+      "name": "[variables('startactivity_apiConnectionName')]",
+      "apiVersion": "[variables('connectorApiVersion')]",
+      "location": "[resourceGroup().location]",
+      "scale": null,
+      "properties": {
+        "displayName": "[variables('startactivity_apiConnectionName')]",
+        "customParameterValues": {},
+        "api": {
+          "id": "[resourceId('Microsoft.Web/customApis', variables('startactivity_connectorName'))]"
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Web/customApis', variables('startactivity_connectorName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Web/connections",
+      "name": "[variables('updateactivity_apiConnectionName')]",
+      "apiVersion": "[variables('connectorApiVersion')]",
+      "location": "[resourceGroup().location]",
+      "scale": null,
+      "properties": {
+        "displayName": "[variables('updateactivity_apiConnectionName')]",
+        "customParameterValues": {},
+        "api": {
+          "id": "[resourceId('Microsoft.Web/customApis', variables('updateactivity_connectorName'))]"
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Web/customApis', variables('updateactivity_connectorName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Web/connections",
+      "name": "[variables('logexceptionactivity_apiConnectionName')]",
+      "apiVersion": "[variables('connectorApiVersion')]",
+      "location": "[resourceGroup().location]",
+      "scale": null,
+      "properties": {
+        "displayName": "[variables('logexceptionactivity_apiConnectionName')]",
+        "customParameterValues": {},
+        "api": {
+          "id": "[resourceId('Microsoft.Web/customApis', variables('logexceptionactivity_connectorName'))]"
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Web/customApis', variables('logexceptionactivity_connectorName'))]"
+      ]
+    }
+  ],
+  "outputs": {
+    "EventHubConnectionString": {
+      "type": "string",
+      "value": "[listkeys(variables('authRuleResourceId'), variables('eventHubApiVersion')).primaryConnectionString]"
+    },
+    "SharedAccessPolicyPrimaryKey": {
+      "type": "string",
+      "value": "[listkeys(variables('authRuleResourceId'), variables('eventHubApiVersion')).primaryKey]"
+    },
+    "StorageAccessKey": {
+      "type": "string",
+      "value": "[listKeys(resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName')), providers('Microsoft.Storage', 'storageAccounts').apiVersions[0]).keys[0].value]"
+    }
+  }
+}
